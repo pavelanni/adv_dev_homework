@@ -79,7 +79,7 @@ podTemplate(
     stage("POST DEV DEPLOYMENT"){
       echo ">>> IMG CP TO NEXUS REGISTRY"
       def token=readFile ('/var/run/secrets/kubernetes.io/serviceaccount/token')
-      sh "skopeo copy --src-tls-verify=false --dest-tls-verify=false --src-creds=default:${token} --dest-creds=admin:admin123 docker://docker-registry.default.svc:5000/${GUID}-parks-dev/${name}:${devTag} docker://nexus-docker.${GUID}-nexus.svc:5000/${GUID}-parks/dev/${name}:${devTag}"
+      sh "skopeo copy --src-tls-verify=false --dest-tls-verify=false --src-creds=default:${token} --dest-creds=admin:admin123 docker://docker-registry.default.svc:5000/${GUID}-parks-dev/${name}:${devTag} docker://nexus-registry.${GUID}-nexus.svc:5000/${GUID}-parks/dev/${name}:${devTag}"
       echo "<<< IMG CP DONE"
     }
 
