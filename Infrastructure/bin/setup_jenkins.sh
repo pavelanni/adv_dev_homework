@@ -27,3 +27,61 @@ echo "Setting up Jenkins in project ${GUID}-jenkins from Git Repo ${REPO} for Cl
 # * CLUSTER: the base url of the cluster used (e.g. na39.openshift.opentlc.com)
 
 # To be Implemented by Student
+
+# Build a slave image with Maven and Skopeo (slide 38 in 05_Building_Applications)
+oc get is -n ${GUID}-jenkins | grep -q 'jenkins-slave-appdev'
+if [[ "$?" == "1" ]] 
+then
+  oc new-build \
+   -D $'FROM docker.io/openshift/jenkins-slave-maven-centos7:v3.9\n
+        USER root\nRUN yum -y install skopeo && yum clean all\n
+        USER 1001' \
+   --name=jenkins-slave-appdev -n ${GUID}-jenkins
+fi
+
+# Wait for the image to become available
+while : ; 
+  do echo "Checking image"
+  oc get is -n ${GUID}-jenkins | grep 'jenkins-slave-appdev'
+  [[ "$?" == "1" ]] || break
+  echo "...no. Sleeping 10 seconds"
+  sleep 10
+done
+
+# Grant the correct permissions to the Jenkins service account
+oc policy add-role-to-user edit system:serviceaccount:${GUID}-jenkins:jenkins -n ${GUID}-parks-dev
+oc policy add-role-to-user edit system:serviceaccount:${GUID}-jenkins:default -n ${GUID}-parks-dev
+oc policy add-role-to-user edit system:serviceaccount:${GUID}-jenkins:jenkins -n ${GUID}-parks-prod
+oc policy add-role-to-user edit system:serviceaccount:${GUID}-jenkins:default -n ${GUID}-parks-prod
+
+# Create a Jenkins instance with persistent storage and sufficient resources
+#oc new-app -f ../templates/${GUID}-jenkins.yaml --param=PROJECT_NAME=${GUID}-jenkins -n ${GUID}-jenkins
+
+# Set up three build configurations with pointers to the pipelines in the source code project
+oc new-build ${REPO} -e GUID=${GUID} \
+             -e CLUSTER=${CLUSTER} \
+             --strategy=pipeline \
+             --context-dir="MLBParks" \
+             -n ${GUID}-jenkins \
+             --name=mlbparks-pipeline
+oc set env bc/mlbparks-pipeline GUID=${GUID} CLUSTER=${CLUSTER} -n ${GUID}-jenkins
+
+
+oc new-build ${REPO} -e GUID=${GUID} \
+             -e CLUSTER=${CLUSTER} \
+             --strategy=pipeline \
+             --context-dir="Nationalparks" \
+             -n ${GUID}-jenkins \
+             --name=natparks-pipeline
+oc set env bc/natparks-pipeline GUID=${GUID} CLUSTER=${CLUSTER} -n ${GUID}-jenkins
+
+oc new-build ${REPO} -e GUID=${GUID} \
+             -e CLUSTER=${CLUSTER} \
+             --strategy=pipeline \
+             --context-dir="ParksMap" \
+             -n ${GUID}-jenkins \
+             --name=parksmap-pipeline
+oc set env bc/parksmap-pipeline GUID=${GUID} CLUSTER=${CLUSTER} -n ${GUID}-jenkins
+
+
+

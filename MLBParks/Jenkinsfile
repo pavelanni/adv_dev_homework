@@ -59,61 +59,37 @@ podTemplate(
     def devTag  = "${version}-${BUILD_NUMBER}"
     def prodTag = "${version}"
 
-    stage("DEPLOY TO DEV"){
-      echo ">>> DEV START DEPLOY"
-
-      echo ">>> DEV START BUILD"
+    stage("Deploy to dev"){
       sh "oc start-build ${name} --from-file=${jarPath} -F -n ${GUID}-parks-dev"
 
-      echo ">>> DEV TAGGING"
       sh "oc tag ${GUID}-parks-dev/${name}:latest ${GUID}-parks-dev/${name}:${devTag} -n ${GUID}-parks-dev"
 
-      echo ">>> DEV SET IMAGE"
       sh "oc set image dc/${name} ${name}=${name}:${devTag} --source=istag -n ${GUID}-parks-dev"
 
-      echo ">>> DEV ROLLOUT LATEST"
       sh "oc rollout latest ${name} -n ${GUID}-parks-dev"
-      echo "<<< DEV DEPLOY DONE"
     }
 
-    stage("POST DEV DEPLOYMENT"){
-      echo ">>> IMG CP TO NEXUS REGISTRY"
+    stage("copy image to registry"){
       def token=readFile ('/var/run/secrets/kubernetes.io/serviceaccount/token')
       sh "skopeo copy --src-tls-verify=false --dest-tls-verify=false --src-creds=default:${token} --dest-creds=admin:admin123 docker://docker-registry.default.svc:5000/${GUID}-parks-dev/${name}:${devTag} docker://nexus-registry.${GUID}-nexus.svc:5000/${GUID}-parks/dev/${name}:${devTag}"
-      echo "<<< IMG CP DONE"
     }
 
     def currentTarget
     def newTarget
-    stage("DEPLOY TO PROD"){
+    stage("Deploy to prod"){
       def isCurrentGreen
-      echo ">>> CHECK FOR TARGETS"
       currentTarget = sh returnStdout: true, script:"oc get svc/${name} -n ${GUID}-parks-prod --template=\"{{.spec.selector.deploymentconfig}}\""
-      echo "<<< CURRENT TARGET DETECTED ${currentTarget}"
 
-      echo ">>> CHECK CURRENT COULOR"
       isCurrentGreen=currentTarget.contains("blue")
       newTarget= isCurrentGreen?"${name}-green":"${name}-blue"
-      echo "<<< CURRENT COULOR DETECTED ${newTarget}"
 
-      echo ">>> DEPLOY TO TARGET: ${newTarget}"
       sh "oc tag ${GUID}-parks-dev/${name}:${devTag} ${GUID}-parks-prod/${name}:${prodTag} -n ${GUID}-parks-prod"
       sh "oc set image dc/${newTarget} ${name}=${name}:${prodTag} --source=istag -n ${GUID}-parks-prod"
       sh "oc rollout latest ${newTarget} -n ${GUID}-parks-prod"
-      echo "<<< DEPLOY DONE ON TARGET: ${newTarget}"
     }
 
-    stage("CHECK FOR B/G"){
-      echo ">>> CHECK FOR POD LIVENESS"
-      sh " ./Infrastructure/bin/podLivenessCheck.sh ${name} ${GUID}-parks-dev"
-      sh " ./Infrastructure/bin/podLivenessCheck.sh ${newTarget} ${GUID}-parks-prod"
-      echo "<<< ${newTarget} IS ALIVE"
-    }
-
-    stage("DO B/G"){
-      echo ">>> EXECUTE B/G"
+    stage("blue-green switch"){
       sh "oc patch svc/${name} -n ${GUID}-parks-prod -p '{\"spec\":{\"selector\":{\"deploymentconfig\":\"${newTarget}\"}}}' "
-      echo "<<< B/G SWAP DONE"
       sleep 10
     }
   }
