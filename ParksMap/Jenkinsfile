@@ -1,4 +1,4 @@
-// Jenkinsfile for ParksMap
+// Jenkinsfile for MLBParks
 podTemplate(
   label: "skopeo-pod",
   cloud: "openshift",
@@ -17,10 +17,81 @@ podTemplate(
     echo "CLUSTER: ${CLUSTER}"
 
     // Your Pipeline Code goes here. Make sure to use the ${GUID} and ${CLUSTER} parameters where appropriate
-    // You need to build the application in directory `ParksMap`.
+    // You need to build the application in directory `Nationalparks`.
     // Also copy "../nexus_settings.xml" to your build directory
     // and replace 'GUID' in the file with your ${GUID} to point to >your< Nexus instance
+ 
+    def name="parksmap"
+    def projectFolder="./ParksMap"
+    def targetFile="${name}.jar"
 
+    stage("Build"){
+      echo "get the source"
+      checkout scm
+      echo "start building"
+      sh "mvn -s nexus_settings.xml -f ${projectFolder} clean package -DskipTests=true"
+      echo "done"
+    }
+
+    stage("unit tests"){
+      sh "mvn -s nexus_settings.xml -f ${projectFolder} test "
+      echo "done"
+    }
+
+    stage("sonarqube") {
+      echo "sonarqube"
+      sh "mvn -s nexus_settings.xml -f ${projectFolder} sonar:sonar -Dsonar.host.url=http://sonarqube-${GUID}-sonarqube.apps.${CLUSTER}"
+      echo "done"
+    }
+
+    stage("push to Nexus") {
+      sh "mvn -s nexus_settings.xml deploy -f ${projectFolder} -DskipTests=true -DaltDeploymentRepository=nexus::default::http://nexus3-${GUID}-nexus.apps.${CLUSTER}/repository/releases"
+      echo "done"
+    }
+
+    def jarPath="${projectFolder}/target/${targetFile}"
+    def pomPath="${projectFolder}/pom.xml"
+
+    def version    = getVersionFromPom(pomPath)
+    def groupId    = getGroupIdFromPom(pomPath)
+    def artifactId = getArtifactIdFromPom(pomPath)
+
+    def devTag  = "${version}-${BUILD_NUMBER}"
+    def prodTag = "${version}"
+
+    stage("Deploy to dev"){
+      sh "oc start-build ${name} --from-file=${jarPath} -F -n ${GUID}-parks-dev"
+
+      sh "oc tag ${GUID}-parks-dev/${name}:latest ${GUID}-parks-dev/${name}:${devTag} -n ${GUID}-parks-dev"
+
+      sh "oc set image dc/${name} ${name}=${name}:${devTag} --source=istag -n ${GUID}-parks-dev"
+
+      sh "oc rollout latest ${name} -n ${GUID}-parks-dev"
+    }
+
+    stage("copy image to registry"){
+      def token=readFile ('/var/run/secrets/kubernetes.io/serviceaccount/token')
+      sh "skopeo copy --src-tls-verify=false --dest-tls-verify=false --src-creds=default:${token} --dest-creds=admin:admin123 docker://docker-registry.default.svc:5000/${GUID}-parks-dev/${name}:${devTag} docker://nexus-registry.${GUID}-nexus.svc:5000/${GUID}-parks/dev/${name}:${devTag}"
+    }
+
+    def currentTarget
+    def newTarget
+    stage("Deploy to prod"){
+      def isCurrentGreen
+      currentTarget = sh returnStdout: true, script:"oc get route/${name} -n ${GUID}-parks-prod --template=\"{{.spec.to.name}}\""
+
+      isCurrentGreen=currentTarget.contains("blue")
+      newTarget= isCurrentGreen?"${name}-green":"${name}-blue"
+
+      sh "oc tag ${GUID}-parks-dev/${name}:${devTag} ${GUID}-parks-prod/${name}:${prodTag} -n ${GUID}-parks-prod"
+      sh "oc set image dc/${newTarget} ${name}=${name}:${prodTag} --source=istag -n ${GUID}-parks-prod"
+      sh "oc rollout latest ${newTarget} -n ${GUID}-parks-prod"
+    }
+
+    stage("blue-green switch"){
+      sh "oc patch route/${name} -n ${GUID}-parks-prod -p '{\"spec\":{\"to\":{\"name\":\"${newTarget}\"}}}' "
+      sleep 10
+    }
   }
 }
 
