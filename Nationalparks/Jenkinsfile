@@ -23,7 +23,7 @@ podTemplate(
  
     def name="nationalparks"
     def projectFolder="./Nationalparks"
-    def targetFile="${name}.war"
+    def targetFile="${name}.jar"
 
     stage("Build"){
       echo "get the source"
